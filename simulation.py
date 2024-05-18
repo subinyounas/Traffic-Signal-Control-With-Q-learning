@@ -3,13 +3,25 @@ import time
 import threading
 import pygame
 import sys
+import multiprocessing
+from multiprocessing import util
+from gymnasium import gym
 
 # Default values of signal timers
+stop_event = threading.Event()
+cycleLength = 20
 defaultGreen = {0: 10, 1: 10, 2: 10, 3: 10}
-defaultRed = 150
-defaultYellow = 5
-
+defaultRed = {
+    0: cycleLength - defaultGreen[0],
+    1: cycleLength - defaultGreen[1],
+    2: cycleLength - defaultGreen[2],
+    3: cycleLength - defaultGreen[3],
+}
+defaultYellow = 2
+elapsedSeconds = 0
+stopSim = False
 signals = []
+signals_original = []
 noOfSignals = 4
 currentGreen = [0, 2]  # Indicates which signal is green currently
 nextGreen = [
@@ -37,7 +49,12 @@ y = {
     "left": [498, 466, 436],
     "up": [800, 800, 800],
 }
-
+vehicles_original = {
+    "right": {0: [], 1: [], 2: [], "crossed": 0},
+    "down": {0: [], 1: [], 2: [], "crossed": 0},
+    "left": {0: [], 1: [], 2: [], "crossed": 0},
+    "up": {0: [], 1: [], 2: [], "crossed": 0},
+}  # used to take a copy and reinitialize vehicles
 vehicles = {
     "right": {0: [], 1: [], 2: [], "crossed": 0},
     "down": {0: [], 1: [], 2: [], "crossed": 0},
@@ -212,18 +229,22 @@ class Vehicle(pygame.sprite.Sprite):
 
 
 # Initialization of signals with default values
-def initialize():
-    ts1 = TrafficSignal(0, defaultYellow, defaultGreen[0])
-    signals.append(ts1)
-    ts2 = TrafficSignal(
-        ts1.red + ts1.yellow + ts1.green, defaultYellow, defaultGreen[1]
-    )
-    signals.append(ts2)
-    ts3 = TrafficSignal(defaultRed, defaultYellow, defaultGreen[2])
-    signals.append(ts3)
-    ts4 = TrafficSignal(defaultRed, defaultYellow, defaultGreen[3])
-    signals.append(ts4)
-    repeat()
+def initialize(self):
+    global signals_original
+    while not stop_event.is_set():
+        print("Inside Initialize")
+        ts1 = TrafficSignal(0, defaultYellow, defaultGreen[0])
+        signals.append(ts1)
+        ts2 = TrafficSignal(
+            ts1.red + ts1.yellow + ts1.green, defaultYellow, defaultGreen[1]
+        )
+        signals.append(ts2)
+        ts3 = TrafficSignal(defaultRed[2], defaultYellow, defaultGreen[2])
+        signals.append(ts3)
+        ts4 = TrafficSignal(defaultRed[3], defaultYellow, defaultGreen[3])
+        signals.append(ts4)
+        signals_original = signals
+        repeat()
 
 
 # Reset stop coordinates of lanes and vehicles
@@ -234,7 +255,7 @@ def reset_stops(direction_index):
 
 
 def repeat():
-    global currentGreen, currentYellow, nextGreen
+    global currentGreen, currentYellow, nextGreen, elapsedSeconds, stopSim
 
     while any(
         signals[cg].green > 0 for cg in currentGreen
@@ -257,7 +278,7 @@ def repeat():
     for cg in currentGreen:
         signals[cg].green = defaultGreen[cg]
         signals[cg].yellow = defaultYellow
-        signals[cg].red = defaultRed
+        signals[cg].red = defaultRed[cg]
 
     currentGreen = nextGreen  # set next signal as green signal
     # Calculate nextGreen dynamically
@@ -266,11 +287,44 @@ def repeat():
         signals[ng].red = sum(
             signals[cg].yellow + signals[cg].green for cg in currentGreen
         )
-    repeat()
+
+    if elapsedSeconds > cycleLength:
+        print("Reset")
+        stopSim = True
+    else:
+        repeat()
 
 
-# Update values of the signal timers after every second
+# Method to stop the simulation
+def stop_simulation(thread1, thread2, screen):
+    global defaultGreen, signals, stopSim, vehicles, simulation , elapsedSeconds
+    print("Stops the current simulation.")
+    defaultGreen = {0: 12, 1: 8, 2: 12, 3: 8}
+    if not stop_event.is_set():
+        stop_event.set()
+    stopSim = False
+    elapsedSeconds = 0
+    restart_simulation(screen)
+
+
+def restart_simulation(screen):
+    global simulation, currentYellow, currentGreen, stopLines, defaultStop
+    currentGreen = [0, 2]
+    currentYellow = 0
+    stopLines = {"right": 590, "down": 330, "left": 800, "up": 535}
+    defaultStop = {"right": 580, "down": 320, "left": 810, "up": 545}
+    simulation.empty()
+    simulation = pygame.sprite.Group()
+    screen.fill((0, 0, 0))  # Example: Fill with black
+    pygame.display.flip()  # Update the display
+    pygame.init()
+
+
+# Update values of
+# the signal timers after every second
 def updateValues():
+    global elapsedSeconds
+    elapsedSeconds += 1
     for i in range(0, noOfSignals):
         if i in currentGreen:
             if currentYellow == 0:
@@ -306,11 +360,15 @@ def generateVehicles():
         time.sleep(1)
 
 
-class Main:
+def initialize_simulation():
+    global stop_event
+    if stop_event.is_set():
+        stop_event.clear()
     thread1 = threading.Thread(
         name="initialization", target=initialize, args=()
     )  # initialization
     thread1.daemon = True
+    print(f"Thread 1:{thread1.is_alive()}")
     thread1.start()
 
     # Colours
@@ -374,3 +432,13 @@ class Main:
             screen.blit(vehicle.image, [vehicle.x, vehicle.y])
             vehicle.move()
         pygame.display.update()
+
+        if stopSim:
+            print("stop sim called")
+            # change the times of default green
+            # reinitialize the whole simulation with the new defaultGreen
+            stop_simulation(thread1, thread2, screen)
+
+
+class Main:
+    initialize_simulation()
